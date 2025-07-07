@@ -1,0 +1,5 @@
+# 忽略 node_modules、日志等
+**/node_modules
+**/dist
+**/.git
+*.log

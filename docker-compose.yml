@@ -1,0 +1,8 @@
+services:
+  app:
+    build: .
+    image: vue-hhzdl:latest
+    container_name: vue-hhzdl
+    ports:
+      - "8080:80"
+    restart: unless-stopped

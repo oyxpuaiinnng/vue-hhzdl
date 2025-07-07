@@ -1,0 +1,12 @@
+# 忽略 node_modules
+node_modules/
+
+# 忽略打包后的本地文件（使用 docs/ 或 gh-pages 发布时会另行处理）
+dist/
+
+# 忽略日志文件
+*.log
+
+# 忽略本地 IDE 配置
+.vscode/
+.DS_Store

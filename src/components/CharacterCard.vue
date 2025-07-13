@@ -44,7 +44,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue';
-
+const BASE = import.meta.env.BASE_URL;
 const props = defineProps({
     party: { type: Array, required: true },
     isPlayerCamp: { type: Boolean, default: true },
@@ -69,13 +69,13 @@ function handleClick() {
         emit('select', props.character);
     }
 }
-const avatarSrc = ref(`/img/avatars/${props.character.avatarUrl}`);
-avatarSrc.value =`/img/avatars/${props.character.avatarUrl}`;
+const avatarSrc = ref(BASE + 'img/avatars/' + props.character.avatarUrl);
+avatarSrc.value =BASE + 'img/avatars/' + props.character.avatarUrl;
 watch(() => props.character.avatarUrl, (newUrl) => {
-  avatarSrc.value = `/img/avatars/${newUrl}`;
+  avatarSrc.value = BASE + 'img/avatars/' + newUrl;
 });
 function handleImageError() {
-    avatarSrc.value = '/img/avatars/hajimi.png';
+    avatarSrc.value = BASE + 'img/avatars/hajimi.png';
 }
 </script>
 

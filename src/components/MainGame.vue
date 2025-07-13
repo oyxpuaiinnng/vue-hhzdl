@@ -2,28 +2,46 @@
 import { onBeforeMount, computed, ref } from 'vue';
 import { useGameStore } from '../store';
 
-import PlayerPanel from './PlayerPanel.vue';
-import EnemyPanel from './EnemyPanel.vue';
 import SkillTree from './SkillTree.vue';
 import EquipmentPanel from './EquipmentPanel.vue';
 import CombatLog from './CombatLog.vue';
 import Challenges from './Challenges.vue';
+import CampPanel from './CampPanel.vue';
+import BattleDivider from './BattleDivider.vue';
 
 const store = useGameStore();
 const saveText = ref('');
 const logs = computed(() => store.logs);
+/*
 const player = computed(() => store.player);
 const enemy = computed(() => store.enemy);
+*/
+const playerParty = computed(() => store.playerParty);
+const enemyParty = computed(() => store.enemyParty);
+console.log(playerParty[0]);//不为空
 
 onBeforeMount(() => {
-    if (!store.player) {
-        const name = prompt('你的名字？') || '冒险者';
-        store.init(name);
-    }
+  if (store.playerParty.length === 0) {
+    const name = prompt('你的名字？') || '小猫咪';
+    store.initPlayerParty([name]);
+    store.initBattle(1);
+  }
 });
 
-function useSkill(skillKey) {
-    store.playerUseSkill(skillKey);
+const currentActor = computed(() => store.currentActor);
+const mode = computed(() => store.mode);
+
+function handleSelect(ch) {
+    if (mode.value === 'selectActor' && ch.isPlayer) {
+        //store.nextActor(ch);
+        console.log("这可能是一个bug……");
+    } else if (mode.value === 'selectTarget') {
+        store.selectTarget(ch);
+    }
+}
+
+function selectSkill(key) {
+    store.selectSkill(key);
 }
 
 function saveGame() {
@@ -33,24 +51,31 @@ function saveGame() {
 function loadGame() {
     store.importSave(saveText.value);
 }
-//202507011414
 </script>
 
 <template>
-    <div v-if="player" class="main-game">
+    <div class="main-game">
         <div class="combat-main">
-            <!-- 玩家和敌人面板 -->
-            <PlayerPanel :player="player" />
-            <EnemyPanel :enemy="enemy" />
+            <!-- 玩家阵营 -->
+            <CampPanel :party="playerParty" :isPlayerCamp="true"
+                :selectable="mode === 'selectActor' || mode === 'selectTarget'" :currentActor="currentActor"
+                @select="handleSelect" />
+
+            <BattleDivider />
+
+            <!-- 敌人阵营 -->
+            <CampPanel :party="enemyParty" :selectable="mode === 'selectActor' || mode === 'selectTarget'"
+                :currentActor="currentActor" @select="handleSelect" />
         </div>
 
+
         <!-- 主动技能按钮 -->
-        <div class="active-skill-buttons" v-if="player?.activeSkills && player?.skillTree">
-            <button v-for="skill in player.activeSkills" :key="skill" @click="useSkill(skill)">
-                {{ player.skillTree[skill]?.name || skill }} (Lv{{ player.skillTree[skill]?.level || 0 }})
+        <div v-if="mode === 'selectSkill'" class="active-skill-buttons">
+            <button v-for="key in currentActor?.activeSkills || []" :key="key" @click="selectSkill(key)">
+                {{ currentActor.skillTree[key].name }} (Lv{{ currentActor.skillTree[key].level }})
             </button>
         </div>
-        
+
         <!-- 战斗日志 -->
         <CombatLog :logs="logs" />
     </div>

@@ -82,16 +82,24 @@ function randomArmorEffect(rarity) {
 
 export const useGameStore = defineStore('game', {
     state: () => ({
-        player: null,
-        enemy: null,
+        // player: null,
+        // enemy: null,
+        // pendingSkills: [],
+        // pendingWeapon: null,
+        // pendingArmor: null,
         logs: [],
-        pendingSkills: [],
-        pendingWeapon: null,
-        pendingArmor: null,
         level: 1,
         levelstr: '',
         isChallenge: false,
-        challengeLevel: null
+        challengeLevel: null,
+
+        // 新增
+        playerParty: [],
+        enemyParty: [],
+        actionQueue: [],
+        currentActor: null,
+        selectedSkill: null,
+        mode: 'init'// 'init'|'selectActor'|'selectSkill'|'selectTarget'|'resolving'
     }),
     actions: {
         // 初始化游戏
@@ -103,58 +111,122 @@ export const useGameStore = defineStore('game', {
             this.setAbility();
         },
 
-        // 装备武器和技能，根据 level 设置属性、生成新敌人
-        setAbility() {
-            if (this.pendingWeapon) {
-                this.player.armedWeapon = this.pendingWeapon;
-                this._log(`武器生效：${this.pendingWeapon.name}`);
-                this.pendingWeapon = null;
-            }
-            if (this.pendingArmor) {
-                this.player.armedArmor = this.pendingArmor;
-                this._log(`护甲生效：${this.pendingArmor.name}`);
-                this.pendingArmor = null;
-            }
-            if (this.pendingSkills.length === 0) {
-                this._log('未装备任何技能，自动装备普通攻击');
-                this.pendingSkills = ['normalAtk'];
+        initBattle() {
+            // 1. 生成新一关的敌人阵营
+            this.enemyParty = [];
+            for (let i = 0; i < Math.random() * (1 + 0.02 * this.level); i++) {
+                const enemy = new Enemy(/* 名称或等级 */ `敌人${i + 1}`, this.level);
+                enemy._log = this._log.bind(this);
+                // 重置属性与效果
+                enemy.effects = [];
+                enemy.updateStats();
+                enemy.health = enemy.maxHealth;
+                this.enemyParty.push(enemy);
             }
 
-            this.player.activeSkills = [...this.pendingSkills];
-            this._log(`装备技能：${this.player.activeSkills.map(k => this.player.skillTree[k].name).join(', ')}`);
-            this.clearLogs();
-
-            this.player.effects = [];
-            this.player.boosted = this.player.defBoosted = 0;
-            this.player.updateStats();
-            this.player.health = this.player.maxHealth;
-
-            this.enemy = new Enemy(this.level);
-            this.enemy._log = this._log.bind(this);
-            this.enemy.effects = [];
-            this.enemy.boosted = this.enemy.defBoosted = 0;
-            this.enemy.updateStats();
-            this.enemy.health = this.enemy.maxHealth;
-
-            const equipEffects = [
-                ...this.player.armedWeapon.effect || [],
-                ...this.player.armedArmor.effect || []
-            ];
-            equipEffects.forEach(([effName, val]) => {
-                this.player.effects.push([
-                    () => globalEffectMapping[effName].call(this.player, val),
-                    [],
-                    {
-                        trigger: 'onTurnStart',
-                        durationType: 'count',
-                        remaining: Infinity,
-                        onExpire: null
-                    }
-                ]);
+            // 2. 重置玩家阵营的每个角色
+            this.playerParty.forEach(ch => {
+                ch.effects = [];
+                ch.updateStats();
             });
 
-            this._log(`进入第 ${this.level} 关：${this.enemy.name}`);
+            // 3. 装备 & 技能生效（如果你将 pending 挂到每个角色上）
+            //    假设 ch.pendingWeapon / pendingArmor / pendingSkills
+            this.playerParty.forEach(ch => {
+                if (ch.pendingWeapon) {
+                    ch.armedWeapon = ch.pendingWeapon;
+                    ch.pendingWeapon = null;
+                }
+                if (ch.pendingArmor) {
+                    ch.armedArmor = ch.pendingArmor;
+                    ch.pendingArmor = null;
+                }
+                if (Array.isArray(ch.pendingSkills) && ch.pendingSkills.length) {
+                    ch.activeSkills = [...ch.pendingSkills];
+                    ch.pendingSkills = [];
+                }
+                // 重新算一次属性
+                ch.updateStats();
+                ch.health = ch.maxHealth;
+            });
+
+            // 4. 构建行动队列（等待character更新）
+            this.actionQueue = [...this.playerParty, ...this.enemyParty]
+                .sort(() => Math.random() - 0.5);
+
+            // 5. 切入selectActor
+            this.currentActor = null;
+            this.mode = 'selectActor';
+            //this._log(`开始第${this.level}关战斗，阵营准备完毕`);
         },
+
+        startNextRound() {
+            // 重建行动队列，顺序可按速度或随机
+            this.actionQueue = shuffle([...this.playerParty, ...this.enemyParty]);
+            // 重置选择
+            this.currentActor   = null;
+            this.selectedSkill  = null;
+            // 切回选角色阶段
+            this.mode = 'selectActor';
+            this._log(`第 ${this.level} 回合开始`);
+      
+            // 触发 onTurnStart 效果
+            [...this.playerParty, ...this.enemyParty].forEach(ch => {
+              ch.checkEffects('onTurnStart');
+            });
+          },
+
+        //当玩家-AI 选中一个角色来行动时调用
+        nextActor(actor) {
+            this.currentActor = actor;
+            this.mode = 'selectSkill';
+            //this._log(`轮到 ${actor.name} 行动`);
+        },
+
+        selectSkill(key) {
+            this.selectedSkill = key;
+            const sk = this.currentActor.skillTree[key];
+            // 判断技能目标类型（假设 sk.targetType）
+            if (sk.targetType === 'single') {
+                this.mode = 'selectTarget';
+            } else {
+                // 群体或自体直接执行
+                this.resolveAction(this.currentActor, key, this.getTargets(sk.targetType));
+            }
+        },
+
+        selectTarget(target) {
+            this.resolveAction(this.currentActor, this.selectedSkill, [target]);
+        },
+
+        // resolveAction() 对应 'resolving'
+        resolveAction(actor, key, targets) {
+            this.mode = 'resolving';
+            const sk = actor.skillTree[key];
+            targets.forEach(t => {
+                sk.execute.call(sk.owner, t, sk.level, true);
+            });
+            // 触发攻击或施法类效果
+            actor.checkEffects('onAttack');
+            actor.checkEffects('onCastSkill', key);
+            // 执行完一个行动后，继续下一个
+            if (this.actionQueue.length) {
+                this.mode = 'selectActor';
+            } else {
+                this.mode = 'endRound';
+            }
+        },
+
+        endRound() {
+            // 回合结束触发
+            [...this.playerParty, ...this.enemyParty].forEach(ch => {
+                ch.checkEffects('onTurnEnd');
+            });
+            // 新一回合重新排队
+            this.initBattle();  // 或者专门的 startNextRound()
+        },
+
+
 
         // 不知道为什么取了这个名字，但是发展成为回合完整逻辑了
         playerUseSkill(key) {
@@ -482,122 +554,122 @@ class Character {
     _createSkillTree() {
         const template = {
             normalAtk: {
-              name: "普通攻击",
-              description: lvl =>
-                `威力: ${100 + 5 * lvl}\n最普通的攻击`,
-              level: 1,
-              maxLevel: 10,
-              dependencies: [],
-              cost: lvl => Math.floor(100 * Math.pow(1.05, lvl)),
-              execute: null
+                name: "普通攻击",
+                description: lvl =>
+                    `威力: ${100 + 5 * lvl}\n最普通的攻击`,
+                level: 1,
+                maxLevel: 10,
+                dependencies: [],
+                cost: lvl => Math.floor(100 * Math.pow(1.05, lvl)),
+                execute: null
             },
             swiftAtk: {
-              name: "迅捷打击",
-              description: lvl =>
-                `威力: ${100 + 4 * lvl}\n4回合内，回合开始时，${((0.1 + 0.01 * lvl) / (1 + 0.01 * lvl)*100).toFixed(1)}%在回合初额外使用一次lv${lvl}普通攻击`,
-              level: 0,
-              maxLevel: 10,
-              dependencies: ["normalAtk"],
-              cost: lvl => Math.floor(200 * Math.pow(1.1, lvl)),
-              execute: null
+                name: "迅捷打击",
+                description: lvl =>
+                    `威力: ${100 + 4 * lvl}\n4回合内，回合开始时，${((0.1 + 0.01 * lvl) / (1 + 0.01 * lvl) * 100).toFixed(1)}%在回合初额外使用一次lv${lvl}普通攻击`,
+                level: 0,
+                maxLevel: 10,
+                dependencies: ["normalAtk"],
+                cost: lvl => Math.floor(200 * Math.pow(1.1, lvl)),
+                execute: null
             },
             afterimage: {
-              name: "残影步",
-              description: lvl =>
-                `消除对方攻防强化\n4回合内，回合开始时，${((0.1 + 0.01 * lvl) / (1 + 0.01 * lvl)*100).toFixed(1)}%在回合初额外使用一次lv${lvl}迅捷打击`,
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["swiftAtk"],
-              cost: lvl => Math.floor(300 * Math.pow(1.2, lvl)),
-              execute: null
+                name: "残影步",
+                description: lvl =>
+                    `消除对方攻防强化\n4回合内，回合开始时，${((0.1 + 0.01 * lvl) / (1 + 0.01 * lvl) * 100).toFixed(1)}%在回合初额外使用一次lv${lvl}迅捷打击`,
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["swiftAtk"],
+                cost: lvl => Math.floor(300 * Math.pow(1.2, lvl)),
+                execute: null
             },
             windRage: {
-              name: "狂风暴击",
-              description: lvl => {
-                const base = 200 + 10 * lvl;
-                const proc = ((0.1 + 0.01 * lvl) / (1 + 0.01 * lvl) * 100);
-                return `造成${base}点固定伤害，${(proc/2).toFixed(1)}%造成${200+5*lvl}%伤害\n4回合内，回合开始时，${proc.toFixed(1)}%在回合初额外使用一次lv${lvl}迅捷打击`;
-              },
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["afterimage"],
-              cost: lvl => Math.floor(400 * Math.pow(1.3, lvl)),
-              execute: null
+                name: "狂风暴击",
+                description: lvl => {
+                    const base = 200 + 10 * lvl;
+                    const proc = ((0.1 + 0.01 * lvl) / (1 + 0.01 * lvl) * 100);
+                    return `造成${base}点固定伤害，${(proc / 2).toFixed(1)}%造成${200 + 5 * lvl}%伤害\n4回合内，回合开始时，${proc.toFixed(1)}%在回合初额外使用一次lv${lvl}迅捷打击`;
+                },
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["afterimage"],
+                cost: lvl => Math.floor(400 * Math.pow(1.3, lvl)),
+                execute: null
             },
             dispel: {
-              name: "驱散",
-              description: lvl =>
-                `移除自身所有所有临时状态。`,
-              level: 0,
-              maxLevel: 1,
-              dependencies: ["normalAtk"],
-              cost: lvl => 500,
-              execute: null
+                name: "驱散",
+                description: lvl =>
+                    `移除自身所有所有临时状态。`,
+                level: 0,
+                maxLevel: 1,
+                dependencies: ["normalAtk"],
+                cost: lvl => 500,
+                execute: null
             },
             roar: {
-              name: "威吓",
-              description: lvl => {
-                const factor = Math.max(0.75, 0.9 - 0.01 * lvl);
-                return `降低目标攻击力至 ${(factor * 100).toFixed(1)}% ，持续 ${Math.min(5, 2 + Math.floor(0.1 * lvl))} 回合`;
-              },
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["dispel"],
-              cost: lvl => Math.floor(300 * Math.pow(1.25, lvl)),
-              execute: null
+                name: "威吓",
+                description: lvl => {
+                    const factor = Math.max(0.75, 0.9 - 0.01 * lvl);
+                    return `降低目标攻击力至 ${(factor * 100).toFixed(1)}% ，持续 ${Math.min(5, 2 + Math.floor(0.1 * lvl))} 回合`;
+                },
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["dispel"],
+                cost: lvl => Math.floor(300 * Math.pow(1.25, lvl)),
+                execute: null
             },
             boost: {
-              name: "力量提升",
-              description: lvl =>
-                `提升自身攻击力 +${lvl} 层`,
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["roar"],
-              cost: lvl => Math.floor(400 * Math.pow(1.25, lvl)),
-              execute: null
+                name: "力量提升",
+                description: lvl =>
+                    `提升自身攻击力 +${lvl} 层`,
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["roar"],
+                cost: lvl => Math.floor(400 * Math.pow(1.25, lvl)),
+                execute: null
             },
             defenceBoost: {
-              name: "防御提升",
-              description: lvl =>
-                `提升自身防御力 +${lvl} 层`,
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["boost"],
-              cost: lvl => Math.floor(400 * Math.pow(1.3, lvl)),
-              execute: null
+                name: "防御提升",
+                description: lvl =>
+                    `提升自身防御力 +${lvl} 层`,
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["boost"],
+                cost: lvl => Math.floor(400 * Math.pow(1.3, lvl)),
+                execute: null
             },
             toxicMist: {
-              name: "毒雾",
-              description: lvl =>
-                `覆盖目标并持续中毒,下${Math.min(5, 2 + Math.floor(0.1 * lvl))} 回合，每回合开始时造成 ${Math.floor(4 * Math.pow(1.1, lvl))} 伤害`,
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["normalAtk"],
-              cost: lvl => Math.floor(150 * Math.pow(1.15, lvl)),
-              execute: null
+                name: "毒雾",
+                description: lvl =>
+                    `覆盖目标并持续中毒,下${Math.min(5, 2 + Math.floor(0.1 * lvl))} 回合，每回合开始时造成 ${Math.floor(4 * Math.pow(1.1, lvl))} 伤害`,
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["normalAtk"],
+                cost: lvl => Math.floor(150 * Math.pow(1.15, lvl)),
+                execute: null
             },
             toxicSlice: {
-              name: "毒刃",
-              description: lvl =>
-                `威力:${60 + 3 * lvl}\n下${Math.min(5, 2 + Math.floor(0.1 * lvl))}次攻击额外造成 ${0.2+0.01*lvl}%攻击数值的固定伤害`,
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["toxicMist"],
-              cost: lvl => Math.floor(200 * Math.pow(1.2, lvl)),
-              execute: null
+                name: "毒刃",
+                description: lvl =>
+                    `威力:${60 + 3 * lvl}\n下${Math.min(5, 2 + Math.floor(0.1 * lvl))}次攻击额外造成 ${0.2 + 0.01 * lvl}%攻击数值的固定伤害`,
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["toxicMist"],
+                cost: lvl => Math.floor(200 * Math.pow(1.2, lvl)),
+                execute: null
             },
             heal: {
-              name: "治疗",
-              description: lvl =>
-                `治疗自身 ${50 + 20 * lvl} 点生命`,
-              level: 0,
-              maxLevel: 5,
-              dependencies: ["normalAtk"],
-              cost: lvl => Math.floor(300 * Math.pow(1.15, lvl)),
-              execute: null
+                name: "治疗",
+                description: lvl =>
+                    `治疗自身 ${50 + 20 * lvl} 点生命`,
+                level: 0,
+                maxLevel: 5,
+                dependencies: ["normalAtk"],
+                cost: lvl => Math.floor(300 * Math.pow(1.15, lvl)),
+                execute: null
             }
-          };
-          
+        };
+
         const tree = {};
         for (const k in template) {
             tree[k] = { ...template[k], owner: this };
@@ -661,7 +733,7 @@ class Character {
 
                 if (isDispellable) {
                     // 立即触发 onExpire 回调
-                    if(typeof meta.onExpire === 'function'){
+                    if (typeof meta.onExpire === 'function') {
                         meta.onExpire.call(this);
                     }
                     return false; // 移除

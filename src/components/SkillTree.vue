@@ -1,6 +1,12 @@
 <template>
     <div class="skill-tree">
         <h2>技能树</h2>
+        <div class="character-switcher">
+            <button v-for="(ch, idx) in playerParty" :key="idx" @click="selectCharacter(idx)"
+                :class="{ active: idx === selectedIndex }">
+                {{ ch.name  }}（技能点：{{ ch.skillRate }}）
+            </button>
+        </div>
         <div v-for="([key, sk]) in visibleSkills" :key="key" class="skill-entry" @mouseenter="hover = key"
             @mouseleave="hover = null">
             <div class="skill-info">
@@ -15,49 +21,60 @@
             </div>
             <div v-if="hover === key" class="tooltip">
                 <pre>{{ typeof sk.description === 'function' ? sk.description(sk.level) : sk.description }}</pre>
-                <div class="cost">升级消耗：{{ sk.cost(sk.level) }} 技能点</div>
+                <div class="cost">升级消耗：{{ sk.cost(sk.level) }} 技能点, 等级上限：{{ sk.maxLevel }}</div>
             </div>
         </div>
     </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted } from 'vue';
+import { computed, ref, watch, onMounted, nextTick } from 'vue';
 import { useGameStore } from '../store';
+//await nextTick();
+onMounted(async () => {
+    await nextTick();
+    //console.log('skillTree ready?', selectedCharacter.value?.skillTree);
+});
 
 const store = useGameStore();
-const player = computed(() => store.player);
-const pendingSkills = computed(() => store.pendingSkills);
+const playerParty = computed(() => store.playerParty);
+const selectedIndex = ref(0);
+const selectedCharacter = computed(() => playerParty.value[selectedIndex.value]);
+function selectCharacter(i) {
+    selectedIndex.value = i;
+}
+const pendingSkills = computed(() => selectedCharacter.value.pendingSkills);
+
 const hover = ref(null);
 
 const visibleSkills = computed(() =>
-    Object.entries(player.value.skillTree).filter(([_, sk]) =>
-        sk.dependencies.every(dep => player.value.skillTree[dep]?.level > 0 || dep === 'normalAtk')
+    Object.entries(selectedCharacter.value.skillTree).filter(([_, sk]) =>
+        sk.dependencies.every(dep => selectedCharacter.value.skillTree[dep]?.level > 0 || dep === 'normalAtk')
     )
 );
 
 onMounted(checkFallbackSkill);
 watch(pendingSkills, checkFallbackSkill);
 function toggle(key) {
-    store.togglePendingSkill(key);
+    selectedCharacter.value.togglePendingSkill(key);
 }
 function canToggle(key) {
-    const sk = player.value.skillTree[key];
+    const sk = selectedCharacter.value.skillTree[key];
     return sk.level > 0;
 }
 function upgrade(key) {
-    store.upgradeSkill(key);
+    store.upgradeSkill(selectedCharacter.value, key);
 }
 function canUpgrade(key) {
-    const sk = player.value.skillTree[key];
+    const sk = selectedCharacter.value.skillTree[key];
     return sk.level < sk.maxLevel &&
-        sk.dependencies.every(dep => player.value.skillTree[dep].level > 0) &&
-        player.value.skillRate >= sk.cost(sk.level);
+        sk.dependencies.every(dep => selectedCharacter.value.skillTree[dep].level > 0) &&
+        selectedCharacter.value.skillRate >= sk.cost(sk.level);
 }
 function checkFallbackSkill() {
     if (pendingSkills.value.length === 0) {
         store._log('未选择任何技能，自动装备普通攻击');
-        store.togglePendingSkill('normalAtk');
+        selectedCharacter.value.togglePendingSkill('normalAtk');
     }
 }
 </script>
@@ -129,5 +146,28 @@ button:disabled {
     margin-top: 6px;
     color: #ffd93d;
     font-size: 0.8em;
+}
+
+.character-switcher {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    justify-content: center;
+}
+
+.character-switcher button {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid #4ecdc4;
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.character-switcher button.active {
+    background: #4ecdc4;
+    color: #000;
+    font-weight: bold;
 }
 </style>
